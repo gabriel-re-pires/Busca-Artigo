@@ -1,0 +1,52 @@
+# Ambiente virtual Python
+.venv/
+venv/
+env/
+
+# Artefatos de build (PyInstaller)
+build/
+dist/
+*.spec.bak
+
+# Pacotes de distribuição (vão para as Releases do GitHub, não para o repo)
+*.zip
+
+# Banco de dados local
+*.db
+*.sqlite
+*.sqlite3
+
+# Arquivos de cache Python
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*.pyo
+
+# Arquivos de teste gerados
+test_output.*
+
+# Variáveis de ambiente e credenciais
+.env
+.env.*
+*.key
+*.pem
+secrets.py
+config_local.py
+
+# IDEs
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Sistema operacional
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Claude Code
+.claude/
+
+# Logs
+*.log
+logs/
