@@ -1,4 +1,4 @@
-# Buscador TCC
+# Busca-Artigo
 
 [![Release](https://img.shields.io/github/v/release/gabriel-re-pires/Busca-Artigo)](https://github.com/gabriel-re-pires/Busca-Artigo/releases/latest)
 ![Plataforma](https://img.shields.io/badge/plataforma-Windows-blue)
@@ -12,15 +12,15 @@ Aplicação desktop para busca e ranqueamento de artigos científicos, desenvolv
 
 > Apenas para Windows — não requer Python, editor de código ou qualquer instalação adicional.
 
-**[⬇️ Baixar BuscadorTCC v1.1.0](https://github.com/gabriel-re-pires/Busca-Artigo/releases/download/v1.1.0/BuscadorTCC_v1.1.0.zip)**
+**[⬇️ Baixar Busca-Artigo v1.2.0](https://github.com/gabriel-re-pires/Busca-Artigo/releases/download/v1.2.0/Busca-Artigo_v1.2.0.zip)**
 
-Após baixar, extraia o `.zip` e execute `BuscadorTCC.exe`.
+Após baixar, extraia o `.zip` e execute `Busca-Artigo.exe`.
 
 ---
 
 ## O que faz
 
-O Buscador TCC pesquisa artigos simultaneamente em três bases acadêmicas — **arXiv**, **Google Scholar** e **Semantic Scholar** — e apresenta os resultados ordenados por relevância. A ordenação usa um algoritmo de pontuação composta que considera:
+O Busca-Artigo pesquisa artigos simultaneamente em três bases acadêmicas — **arXiv**, **Google Scholar** e **Semantic Scholar** — e apresenta os resultados ordenados por relevância. A ordenação usa um algoritmo de pontuação composta que considera:
 
 - Similaridade semântica com o tema pesquisado (40%)
 - Número de citações (25%)

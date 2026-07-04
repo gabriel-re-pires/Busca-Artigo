@@ -6,7 +6,7 @@ from typing import Callable, List, Optional
 from adapters.repository.sqlite_cache import SQLiteCache
 from adapters.search_gateways.base_client import BaseSearchClient
 from core.entities import Paper
-from core.exceptions import NetworkError, RateLimitError
+from core.exceptions import EmptyResultsError, NetworkError, RateLimitError
 from infrastructure.nlp_tools.processor import NLPProcessor
 from use_cases.filter_engine import FilterEngine
 from use_cases.ranking_engine import RankingEngine
@@ -14,6 +14,13 @@ from use_cases.ranking_engine import RankingEngine
 logger = logging.getLogger(__name__)
 
 ProgressCallback = Optional[Callable[[int, str], None]]
+
+# Nomes amigáveis para exibir no relatório por fonte (classe -> rótulo)
+_FRIENDLY_NAMES = {
+    "ArxivClient": "arXiv",
+    "ScholarClient": "Google Scholar",
+    "SemanticScholarClient": "Semantic Scholar",
+}
 
 
 class SearchInteractor:
@@ -29,6 +36,8 @@ class SearchInteractor:
         self.nlp = nlp
         self.ranking = ranking
         self.filter_engine = FilterEngine()
+        # Preenchido a cada busca: {nome_da_fonte: status legível}
+        self.source_report: dict = {}
 
     def execute_search(
         self,
@@ -46,6 +55,7 @@ class SearchInteractor:
         total_clients = len(self.clients)
         all_papers: List[Paper] = []
         network_failures = 0
+        self.source_report = {}
 
         _notify(10, f"Buscando em {total_clients} fonte(s)...")
 
@@ -61,21 +71,32 @@ class SearchInteractor:
             completed = 0
             for future in concurrent.futures.as_completed(futures):
                 client = futures[future]
-                client_name = client.__class__.__name__
+                cls_name = client.__class__.__name__
+                name = _FRIENDLY_NAMES.get(cls_name, cls_name)
                 try:
                     papers = future.result()
                     all_papers.extend(papers)
-                    logger.info("%s: %d artigo(s) encontrado(s).", client_name, len(papers))
-                except (NetworkError, RateLimitError) as exc:
+                    if papers:
+                        self.source_report[name] = f"{len(papers)} resultado(s)"
+                    else:
+                        self.source_report[name] = "sem resultados (0)"
+                    logger.info("%s: %d artigo(s) encontrado(s).", name, len(papers))
+                except RateLimitError as exc:
                     network_failures += 1
-                    logger.warning("%s falhou: %s", client_name, exc)
+                    self.source_report[name] = "bloqueado (muitas requisições — HTTP 429)"
+                    logger.warning("%s bloqueado: %s", name, exc)
+                except NetworkError as exc:
+                    network_failures += 1
+                    self.source_report[name] = "falha de conexão"
+                    logger.warning("%s falhou: %s", name, exc)
                 except Exception as exc:
-                    logger.error("%s erro inesperado: %s", client_name, exc, exc_info=True)
+                    self.source_report[name] = "erro ao processar a resposta"
+                    logger.error("%s erro inesperado: %s", name, exc, exc_info=True)
 
                 completed += 1
                 # Progress: 10% → 50% as each source completes
                 pct = 10 + int(completed / total_clients * 40)
-                _notify(pct, f"Fonte concluída: {client_name}")
+                _notify(pct, f"Fonte concluída: {name}")
 
         if network_failures == total_clients and not all_papers:
             raise NetworkError(
@@ -101,4 +122,18 @@ class SearchInteractor:
         ranked = self.ranking.rank_papers(query, processed)
 
         _notify(92, "Finalizando lista de resultados...")
+
+        if not ranked:
+            # Nunca retorna vazio em silêncio: explica o porquê.
+            if not all_papers:
+                msg = "Nenhuma fonte retornou artigos para esta busca."
+            elif not filtered:
+                msg = (
+                    "As fontes retornaram artigos, mas todos foram descartados pelos "
+                    "filtros de ano/idioma. Tente afrouxar os filtros."
+                )
+            else:
+                msg = "Não foi possível montar a lista de resultados."
+            raise EmptyResultsError(msg, dict(self.source_report))
+
         return ranked[:max_results]

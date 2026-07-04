@@ -1,23 +1,26 @@
 import logging
-import os
-import re
 import time
 
 from PySide6.QtCore import QThread, Signal
 
-from core.exceptions import NetworkError, RateLimitError
+from core.exceptions import EmptyResultsError, NetworkError, RateLimitError
 from use_cases.search_interactor import SearchInteractor
-from adapters.exporters.pdf_export import PDFExporter
-from adapters.exporters.excel_export import ExcelExporter
 
 logger = logging.getLogger(__name__)
+
+
+def format_source_report(report: dict) -> str:
+    """Turns {'arXiv': '5 resultado(s)', ...} into a readable multi-line string."""
+    if not report:
+        return ""
+    return "\n".join(f"  • {name}: {status}" for name, status in report.items())
 
 
 class SearchWorker(QThread):
     progress_update = Signal(int, str)   # (percentage, stage_label)
     search_finished = Signal(dict)       # result payload
     search_error = Signal(str, str)      # (error_type, message)
-    # error_type values: "network", "rate_limit", "generic"
+    # error_type values: "network", "rate_limit", "empty", "generic"
 
     def __init__(self, interactor: SearchInteractor, query_params: dict) -> None:
         super().__init__()
@@ -34,9 +37,6 @@ class SearchWorker(QThread):
             y_start = self.query_params.get("year_start")
             y_end = self.query_params.get("year_end")
             lang_pref = self.query_params.get("lang_pref", "Todos")
-            export_pdf = self.query_params.get("export_pdf", False)
-            export_excel = self.query_params.get("export_excel", False)
-            export_folder = self.query_params.get("export_folder")
 
             # The interactor drives progress from 10% → 92%
             def on_progress(pct: int, msg: str) -> None:
@@ -51,9 +51,6 @@ class SearchWorker(QThread):
             if results:
                 avg_sim = sum(p.similarity_score for p in results) / len(results)
 
-            self.progress_update.emit(93, "Exportando arquivo...")
-            exported_files = self._export(results, export_pdf, export_excel, export_folder)
-
             execution_time = time.time() - start_time
             self.progress_update.emit(100, "Concluído.")
             self.search_finished.emit(
@@ -62,10 +59,17 @@ class SearchWorker(QThread):
                     "total": len(results),
                     "avg_sim": round(avg_sim, 4),
                     "time_sec": round(execution_time, 2),
-                    "exported": exported_files,
+                    "source_report": dict(self.interactor.source_report),
                 }
             )
 
+        except EmptyResultsError as exc:
+            logger.info("Busca sem resultados: %s", exc)
+            report = format_source_report(exc.source_report)
+            message = str(exc)
+            if report:
+                message += "\n\nStatus de cada fonte:\n" + report
+            self.search_error.emit("empty", message)
         except NetworkError as exc:
             logger.error("Erro de rede na busca.", exc_info=True)
             self.search_error.emit("network", str(exc))
@@ -75,43 +79,3 @@ class SearchWorker(QThread):
         except Exception as exc:
             logger.exception("Erro inesperado no SearchWorker.")
             self.search_error.emit("generic", str(exc))
-
-    def _export(
-        self,
-        results: list,
-        export_pdf: bool,
-        export_excel: bool,
-        export_folder: str,
-    ) -> list[str]:
-        if not (export_pdf or export_excel):
-            return []
-
-        if export_folder:
-            os.makedirs(export_folder, exist_ok=True)
-
-        next_num = self._next_file_number(export_folder or ".")
-        base = f"{next_num}_Resultado_de_Pesquisa"
-        exported = []
-
-        if export_pdf:
-            path = os.path.join(export_folder, f"{base}.pdf") if export_folder else f"{base}.pdf"
-            exported.append(PDFExporter().export(results, path))
-
-        if export_excel:
-            path = os.path.join(export_folder, f"{base}.xlsx") if export_folder else f"{base}.xlsx"
-            exported.append(ExcelExporter().export(results, path))
-
-        return exported
-
-    @staticmethod
-    def _next_file_number(directory: str) -> int:
-        next_num = 1
-        if not os.path.exists(directory):
-            return next_num
-        for filename in os.listdir(directory):
-            match = re.match(r"^(\d+)_Resultado_de_Pesquisa\.(pdf|xlsx)$", filename)
-            if match:
-                num = int(match.group(1))
-                if num >= next_num:
-                    next_num = num + 1
-        return next_num

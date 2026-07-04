@@ -45,7 +45,7 @@ def load_stylesheet(app, path: str) -> None:
 def main() -> None:
     setup_logging()
     logger = logging.getLogger(__name__)
-    logger.info("Iniciando Buscador TCC...")
+    logger.info("Iniciando Busca-Artigo...")
 
     # Deferred imports ensure logging is fully configured before any module loads
     from PySide6.QtWidgets import QApplication

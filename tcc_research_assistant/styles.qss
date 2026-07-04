@@ -161,6 +161,30 @@ QSpinBox::up-button:hover, QSpinBox::down-button:hover {
     background-color: #e0f2fe;
 }
 
+/* Botão Exportar (destaque verde) */
+QPushButton#ExportButton {
+    background-color: #10b981;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: bold;
+    padding: 10px 16px;
+}
+
+QPushButton#ExportButton:hover {
+    background-color: #059669;
+}
+
+QPushButton#ExportButton:pressed {
+    background-color: #047857;
+}
+
+QPushButton#ExportButton:disabled {
+    background-color: #cbd5e1;
+    color: #f8fafc;
+}
+
 /* Botões Secundários (ex: Selecionar Pasta) */
 QPushButton {
     background-color: #ffffff;

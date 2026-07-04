@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 class ArxivClient(BaseSearchClient):
-    BASE_URL = "http://export.arxiv.org/api/query"
+    BASE_URL = "https://export.arxiv.org/api/query"
 
     def search(
         self,

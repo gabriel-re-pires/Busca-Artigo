@@ -2,10 +2,12 @@ import html
 import json
 import logging
 import os
+import re
 
 from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QIcon
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -28,7 +30,9 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from infrastructure.gui.viewmodels.main_viewmodel import SearchWorker
+from adapters.exporters.excel_export import ExcelExporter
+from adapters.exporters.pdf_export import PDFExporter
+from infrastructure.gui.viewmodels.main_viewmodel import SearchWorker, format_source_report
 from use_cases.search_interactor import SearchInteractor
 
 logger = logging.getLogger(__name__)
@@ -68,8 +72,9 @@ class AppWindow(QMainWindow):
         self.nlp = nlp
         self.ranking = ranking
         self.config_path = config_path
+        self.last_papers: list = []  # resultados da última busca, para exportação sob demanda
 
-        self.setWindowTitle("TCC Research Assistant")
+        self.setWindowTitle("Busca-Artigo")
         self.resize(1050, 750)
 
         if icon_path and os.path.exists(icon_path):
@@ -95,7 +100,15 @@ class AppWindow(QMainWindow):
         root.setContentsMargins(20, 20, 20, 20)
         root.setSpacing(20)
 
-        # --- Search input ---
+        # --- Cards row ---
+        cards = QHBoxLayout()
+        cards.setSpacing(20)
+        cards.addWidget(self._build_source_card())
+        cards.addWidget(self._build_filter_card())
+        cards.addWidget(self._build_export_card())
+        root.addLayout(cards)
+
+        # --- Search input (posicionado logo acima do botão de busca) ---
         self.kw_input = QLineEdit()
         self.kw_input.setPlaceholderText(
             "🔍 Digite palavras-chave separadas por vírgula e pressione Enter..."
@@ -105,14 +118,6 @@ class AppWindow(QMainWindow):
         self.kw_input.returnPressed.connect(self._start_search)
         self.kw_input.setFocus()
         root.addWidget(self.kw_input)
-
-        # --- Cards row ---
-        cards = QHBoxLayout()
-        cards.setSpacing(20)
-        cards.addWidget(self._build_source_card())
-        cards.addWidget(self._build_filter_card())
-        cards.addWidget(self._build_export_card())
-        root.addLayout(cards)
 
         # --- Search button ---
         self.btn_search = QPushButton("Iniciar Busca")
@@ -142,6 +147,13 @@ class AppWindow(QMainWindow):
         self.stats_label = QLabel("Total: 0 | Semelh. Média: 0.00 | Tempo: 0s")
         self.stats_label.setObjectName("StatsText")
         root.addWidget(self.stats_label)
+
+        # --- Status por fonte (mostra se cada base respondeu) ---
+        self.sources_label = QLabel("")
+        self.sources_label.setObjectName("StatusText")
+        self.sources_label.setWordWrap(True)
+        self.sources_label.setVisible(False)
+        root.addWidget(self.sources_label)
 
         # --- Results table ---
         self.table = QTableWidget(0, 9)
@@ -280,6 +292,17 @@ class AppWindow(QMainWindow):
         layout.addLayout(dir_row)
 
         layout.addStretch()
+
+        # Botão de exportação sob demanda — só salva quando clicado
+        self.btn_export = QPushButton("Exportar")
+        self.btn_export.setObjectName("ExportButton")
+        self.btn_export.setCursor(Qt.PointingHandCursor)
+        self.btn_export.setMinimumHeight(42)
+        self.btn_export.setEnabled(False)  # habilita só quando houver resultados
+        self.btn_export.setToolTip("Realize uma busca para habilitar a exportação.")
+        self.btn_export.clicked.connect(self._on_export_clicked)
+        layout.addWidget(self.btn_export)
+
         return card
 
     # ------------------------------------------------------------------
@@ -363,11 +386,6 @@ class AppWindow(QMainWindow):
             "year_start": ys,
             "year_end": ye,
             "lang_pref": self.combo_lang.currentText(),
-            "export_pdf": self.radio_pdf.isChecked(),
-            "export_excel": self.radio_excel.isChecked(),
-            "export_folder": os.path.join(
-                self.current_export_dir, "Resultados_Assistente_TCC"
-            ),
         }
 
         self._set_searching_state(True)
@@ -391,8 +409,15 @@ class AppWindow(QMainWindow):
             f"Semelh. Média: {payload['avg_sim']} | "
             f"Tempo: {payload['time_sec']}s"
         )
+        self._show_source_report(payload.get("source_report"))
 
         papers = payload["papers"]
+        self.last_papers = papers
+        self.btn_export.setEnabled(bool(papers))
+        self.btn_export.setToolTip(
+            "Salvar os resultados no formato selecionado."
+            if papers else "Realize uma busca para habilitar a exportação."
+        )
         self.table.setSortingEnabled(False)
         self.table.setRowCount(len(papers))
         for row, p in enumerate(papers):
@@ -435,20 +460,6 @@ class AppWindow(QMainWindow):
         )
         self.table.setMinimumHeight(table_h)
 
-        if payload["exported"]:
-            msg_box = QMessageBox(self)
-            msg_box.setIcon(QMessageBox.Information)
-            msg_box.setWindowTitle("Exportação Concluída")
-            msg_box.setText(
-                "Exportação concluída com sucesso:\n" + "\n".join(payload["exported"])
-            )
-            open_btn = msg_box.addButton("Abrir Pasta", QMessageBox.ActionRole)
-            msg_box.addButton(QMessageBox.Ok)
-            msg_box.exec()
-            if msg_box.clickedButton() == open_btn:
-                folder = os.path.dirname(payload["exported"][0])
-                QDesktopServices.openUrl(QUrl.fromLocalFile(folder))
-
         logger.info(
             "Busca concluída: %d resultado(s) em %.2fs.",
             payload["total"],
@@ -457,6 +468,23 @@ class AppWindow(QMainWindow):
 
     def _on_search_error(self, error_type: str, message: str) -> None:
         self._set_searching_state(False)
+        self.last_papers = []
+        self.btn_export.setEnabled(False)
+
+        if error_type == "empty":
+            self.progress_label.setText("Nenhum resultado.")
+            QMessageBox.information(
+                self,
+                "Nenhum Resultado Encontrado",
+                f"{message}\n\n"
+                "Sugestões:\n"
+                "• Aguarde alguns minutos (fontes como arXiv e Semantic Scholar "
+                "podem bloquear temporariamente por excesso de requisições).\n"
+                "• Tente outras palavras-chave ou marque outras fontes.\n"
+                "• Afrouxe os filtros de ano/idioma.",
+            )
+            return
+
         self.progress_label.setText("Ocorreu um erro.")
 
         if error_type == "network":
@@ -514,6 +542,90 @@ class AppWindow(QMainWindow):
         if url:
             QDesktopServices.openUrl(QUrl(url))
 
+    def _show_source_report(self, report: dict) -> None:
+        """Mostra, abaixo das estatísticas, o que cada fonte retornou."""
+        if not report:
+            self.sources_label.setVisible(False)
+            return
+        parts = [f"{name}: {status}" for name, status in report.items()]
+        self.sources_label.setText("Fontes  →   " + "    |    ".join(parts))
+        self.sources_label.setVisible(True)
+
+    # ------------------------------------------------------------------
+    # Export (sob demanda — só ao clicar em "Exportar")
+    # ------------------------------------------------------------------
+
+    def _on_export_clicked(self) -> None:
+        if not self.last_papers:
+            QMessageBox.warning(
+                self, "Aviso", "Não há resultados para exportar. Realize uma busca primeiro."
+            )
+            return
+
+        folder = os.path.join(self.current_export_dir, "Resultados_Busca-Artigo")
+        try:
+            os.makedirs(folder, exist_ok=True)
+        except OSError as exc:
+            QMessageBox.critical(
+                self, "Erro", f"Não foi possível criar a pasta de destino:\n{exc}"
+            )
+            return
+
+        want_pdf = self.radio_pdf.isChecked()
+        want_excel = self.radio_excel.isChecked()
+
+        self.btn_export.setEnabled(False)
+        self.btn_export.setText("Exportando...")
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        exported: list = []
+        try:
+            exported = self._export_results(self.last_papers, folder, want_pdf, want_excel)
+        except Exception as exc:
+            logger.exception("Falha na exportação.")
+            QMessageBox.critical(
+                self, "Erro na Exportação", f"Não foi possível exportar os resultados:\n\n{exc}"
+            )
+        finally:
+            QApplication.restoreOverrideCursor()
+            self.btn_export.setText("Exportar")
+            self.btn_export.setEnabled(True)
+
+        if exported:
+            msg_box = QMessageBox(self)
+            msg_box.setIcon(QMessageBox.Information)
+            msg_box.setWindowTitle("Exportação Concluída")
+            msg_box.setText("Exportação concluída com sucesso:\n" + "\n".join(exported))
+            open_btn = msg_box.addButton("Abrir Pasta", QMessageBox.ActionRole)
+            msg_box.addButton(QMessageBox.Ok)
+            msg_box.exec()
+            if msg_box.clickedButton() == open_btn:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(os.path.dirname(exported[0])))
+
+    def _export_results(
+        self, papers: list, folder: str, want_pdf: bool, want_excel: bool
+    ) -> list:
+        next_num = self._next_file_number(folder)
+        base = f"{next_num}_Resultado_de_Pesquisa"
+        exported = []
+        if want_pdf:
+            exported.append(PDFExporter().export(papers, os.path.join(folder, f"{base}.pdf")))
+        if want_excel:
+            exported.append(ExcelExporter().export(papers, os.path.join(folder, f"{base}.xlsx")))
+        return exported
+
+    @staticmethod
+    def _next_file_number(directory: str) -> int:
+        next_num = 1
+        if not os.path.exists(directory):
+            return next_num
+        for filename in os.listdir(directory):
+            match = re.match(r"^(\d+)_Resultado_de_Pesquisa\.(pdf|xlsx)$", filename)
+            if match:
+                num = int(match.group(1))
+                if num >= next_num:
+                    next_num = num + 1
+        return next_num
+
     def _set_searching_state(self, searching: bool) -> None:
         self.btn_search.setEnabled(not searching)
         self.btn_search.setText("Buscando..." if searching else "Iniciar Busca")
@@ -523,6 +635,8 @@ class AppWindow(QMainWindow):
             self.table.setSortingEnabled(False)
             self.table.setRowCount(0)
             self.hint_label.setVisible(False)
+            self.sources_label.setVisible(False)
+            self.btn_export.setEnabled(False)
 
     @staticmethod
     def _parse_year(text: str):

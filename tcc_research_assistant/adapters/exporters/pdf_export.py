@@ -28,7 +28,7 @@ class PDFExporter(BaseExporter):
         pdf.add_page()
         
         pdf.set_font("helvetica", style="B", size=16)
-        pdf.cell(0, 10, "TCC Research Assistant - Results", new_x="LMARGIN", new_y="NEXT", align="C")
+        pdf.cell(0, 10, "Busca-Artigo - Resultados", new_x="LMARGIN", new_y="NEXT", align="C")
         pdf.ln(5)
 
         for idx, p in enumerate(papers, 1):
